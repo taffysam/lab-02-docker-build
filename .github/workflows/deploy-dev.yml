@@ -1,3 +1,4 @@
+
 name: Deploy to development
 
 on:
@@ -31,13 +32,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Docker Desktop is not accessible."
           }
-            - name: Create development environment configuration
+
+      - name: Create development environment configuration
         shell: pwsh
         run: |
           @'
           APP_ENV=development
           APP_NAME=shipping-calculator
-          '@ | Set-Content .env.dev 
+          '@ | Set-Content .env.dev
 
       - name: Deploy and verify application
         shell: pwsh
