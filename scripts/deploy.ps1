@@ -94,12 +94,33 @@ try {
         throw "Container is not running."
     }
 
-    $logs = docker logs $containerName 2>&1
+    # Allow a short period for the application to produce its startup output.
+    $startupVerified = $false
 
-    if ($LASTEXITCODE -ne 0 -or
-        $logs -notmatch "Shipping Calculator") {
-        throw "Startup verification failed."
+    for ($attempt = 1; $attempt -le 10; $attempt++) {
+    $logs = docker logs $containerName 2>&1
+    $logsExitCode = $LASTEXITCODE
+    $logText = $logs -join "`n"
+
+    if ($logsExitCode -ne 0) {
+        throw "Unable to read container logs. Docker exit code: $logsExitCode"
     }
+
+    if ($logText -match "Shipping Calculator") {
+        $startupVerified = $true
+        Write-Host "Startup verified on attempt $attempt"
+        break
+    }
+
+    Write-Host "Waiting for startup output ($attempt/10)..."
+    Start-Sleep -Seconds 1
+}
+
+if (-not $startupVerified) {
+    Write-Host "Container logs collected during verification:"
+    Write-Host $logText
+    throw "Startup verification failed after 10 attempts."
+}
 
     & docker exec $containerName python -c `
         "from app import calculate_shipping; assert calculate_shipping(7) == 100"
