@@ -1,0 +1,52 @@
+
+name: Deploy to development
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: "Published GHCR image reference"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: shipping-development
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to Docker Desktop
+    runs-on: [self-hosted, Windows, X64]
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Verify Docker access
+        shell: pwsh
+        run: |
+          docker info
+          if ($LASTEXITCODE -ne 0) {
+            throw "Docker Desktop is not accessible."
+          }
+
+      - name: Create development environment configuration
+        shell: pwsh
+        run: |
+          @'
+          APP_ENV=development
+          APP_NAME=shipping-calculator
+          '@ | Set-Content .env.dev
+
+      - name: Deploy and verify application
+        shell: pwsh
+        env:
+          DEPLOY_IMAGE: ${{ inputs.image }}
+        run: |
+          ./scripts/deploy.ps1 -Image $env:DEPLOY_IMAGE
+          if ($LASTEXITCODE -ne 0) {
+            throw "Deployment failed. Check the deployment and rollback logs."
+          }
