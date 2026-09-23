@@ -8,6 +8,11 @@ on:
         description: "Published GHCR image reference"
         required: true
         type: string
+      simulate_failure:
+        description: "Simulate deployment failure to test rollback"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -45,8 +50,19 @@ jobs:
         shell: powershell
         env:
           DEPLOY_IMAGE: ${{ inputs.image }}
+          SIMULATE_FAILURE: ${{ inputs.simulate_failure }}
         run: |
-          ./scripts/deploy.ps1 -Image $env:DEPLOY_IMAGE
+          if ($env:SIMULATE_FAILURE -eq "true") {
+            Write-Host "Failure simulation enabled."
+            ./scripts/deploy.ps1 `
+              -Image $env:DEPLOY_IMAGE `
+              -SimulateFailure
+          }
+          else {
+            ./scripts/deploy.ps1 `
+              -Image $env:DEPLOY_IMAGE
+          }
+
           if ($LASTEXITCODE -ne 0) {
-            throw "Deployment failed. Check the deployment and rollback logs."
+            throw "Deployment failed. Check deployment and rollback logs."
           }
