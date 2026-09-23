@@ -1,16 +1,34 @@
-
 param(
     [Parameter(Mandatory = $true)]
     [string]$Image,
+
+    [Parameter(Mandatory = $false)]
+    [ValidateSet("development", "production")]
+    [string]$Environment = "development",
 
     [switch]$SimulateFailure
 )
 
 $ErrorActionPreference = "Stop"
 
-$containerName = "shipping-dev"
-$previousName = "shipping-dev-previous"
-$envFile = Join-Path $PSScriptRoot "..\.env.dev"
+$environmentSuffix = if ($Environment -eq "production") {
+    "prod"
+}
+else {
+    "dev"
+}
+
+$containerName = "shipping-$environmentSuffix"
+$previousName = "$containerName-previous"
+$envFile = Join-Path $PSScriptRoot "..\.env.$environmentSuffix"
+
+Write-Host "========================================"
+Write-Host "Deployment environment : $Environment"
+Write-Host "Container name         : $containerName"
+Write-Host "Previous container     : $previousName"
+Write-Host "Environment file       : $envFile"
+Write-Host "Image                  : $Image"
+Write-Host "========================================"
 
 function Invoke-Docker {
     param([string[]]$Arguments)
@@ -42,18 +60,26 @@ try {
         throw "Environment file not found: $envFile"
     }
 
-    if (Test-ContainerExists $previousName) {
-        throw "Backup container already exists: $previousName"
-    }
-
     Write-Host "Pulling deployment image: $Image"
 
     # Pull before touching the existing deployment.
     Invoke-Docker -Arguments @("pull", $Image)
 
+    # Remove the stale backup only after the candidate image
+    # has been pulled successfully.
+    if (Test-ContainerExists $previousName) {
+        Write-Host "Removing stale backup container: $previousName"
+
+        Invoke-Docker -Arguments @(
+            "rm", "-f", $previousName
+        )
+    }
+
     # Preserve the current deployment.
     if (Test-ContainerExists $containerName) {
-        Invoke-Docker -Arguments @("stop", $containerName)
+        Invoke-Docker -Arguments @(
+            "stop", $containerName
+        )
 
         Invoke-Docker -Arguments @(
             "rename", $containerName, $previousName
@@ -62,6 +88,7 @@ try {
         $previousPreserved = $true
     }
 
+    # Build the docker run arguments.
     $runArgs = @(
         "run", "-d",
         "--name", $containerName,
@@ -84,9 +111,11 @@ try {
         )
     }
 
+    # Start the candidate deployment.
     Invoke-Docker -Arguments $runArgs
     $newContainerCreated = $true
 
+    # Verify that the container is running.
     $running = docker inspect $containerName `
         --format '{{.State.Running}}'
 
@@ -94,34 +123,37 @@ try {
         throw "Container is not running."
     }
 
-    # Allow a short period for the application to produce its startup output.
+    # Allow a short period for the application to produce
+    # its startup output.
     $startupVerified = $false
 
     for ($attempt = 1; $attempt -le 10; $attempt++) {
-    $logs = docker logs $containerName 2>&1
-    $logsExitCode = $LASTEXITCODE
-    $logText = $logs -join "`n"
+        $logs = docker logs $containerName 2>&1
+        $logsExitCode = $LASTEXITCODE
+        $logText = $logs -join "`n"
 
-    if ($logsExitCode -ne 0) {
-        throw "Unable to read container logs. Docker exit code: $logsExitCode"
+        if ($logsExitCode -ne 0) {
+            throw "Unable to read container logs. Docker exit code: $logsExitCode"
+        }
+
+        if ($logText -match "Shipping Calculator") {
+            $startupVerified = $true
+            Write-Host "Startup verified on attempt $attempt"
+            break
+        }
+
+        Write-Host "Waiting for startup output ($attempt/10)..."
+        Start-Sleep -Seconds 1
     }
 
-    if ($logText -match "Shipping Calculator") {
-        $startupVerified = $true
-        Write-Host "Startup verified on attempt $attempt"
-        break
+    if (-not $startupVerified) {
+        Write-Host "Container logs collected during verification:"
+        Write-Host $logText
+
+        throw "Startup verification failed after 10 attempts."
     }
 
-    Write-Host "Waiting for startup output ($attempt/10)..."
-    Start-Sleep -Seconds 1
-}
-
-if (-not $startupVerified) {
-    Write-Host "Container logs collected during verification:"
-    Write-Host $logText
-    throw "Startup verification failed after 10 attempts."
-}
-
+    # Perform a functional application test.
     & docker exec $containerName python -c `
         "from app import calculate_shipping; assert calculate_shipping(7) == 100"
 
@@ -134,23 +166,29 @@ if (-not $startupVerified) {
 catch {
     Write-Host "DEPLOYMENT FAILED: $_" -ForegroundColor Red
 
-    # Only attempt rollback if the existing deployment was preserved.
+    # Only attempt rollback if the existing deployment
+    # was successfully preserved.
     if ($previousPreserved) {
         Write-Host "Starting rollback..."
 
         try {
+            # Remove the failed candidate deployment.
             if (Test-ContainerExists $containerName) {
                 Invoke-Docker -Arguments @(
                     "rm", "-f", $containerName
                 )
             }
 
+            # Restore the previous deployment.
             Invoke-Docker -Arguments @(
                 "rename", $previousName, $containerName
             )
 
-            Invoke-Docker -Arguments @("start", $containerName)
+            Invoke-Docker -Arguments @(
+                "start", $containerName
+            )
 
+            # Verify that the restored container is running.
             $restored = docker inspect $containerName `
                 --format '{{.State.Running}}'
 
@@ -164,10 +202,15 @@ catch {
             Write-Host "ROLLBACK FAILED: $_" -ForegroundColor Red
         }
     }
-    elseif ($newContainerCreated -and
-            (Test-ContainerExists $containerName)) {
+    elseif (
+        $newContainerCreated -and
+        (Test-ContainerExists $containerName)
+    ) {
         Write-Host "No previous deployment to restore."
-        Invoke-Docker -Arguments @("rm", "-f", $containerName)
+
+        Invoke-Docker -Arguments @(
+            "rm", "-f", $containerName
+        )
     }
 
     exit 1
