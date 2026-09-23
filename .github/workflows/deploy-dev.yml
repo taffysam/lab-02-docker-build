@@ -25,6 +25,7 @@ jobs:
   deploy:
     name: Deploy to Docker Desktop
     runs-on: [self-hosted, Windows, X64]
+    environment: development
 
     steps:
       - name: Check out repository
@@ -40,11 +41,14 @@ jobs:
 
       - name: Create development environment configuration
         shell: powershell
+        env:
+          APP_ENV: ${{ vars.APP_ENV }}
+          APP_NAME: ${{ vars.APP_NAME }}
         run: |
-          @'
-          APP_ENV=development
-          APP_NAME=shipping-calculator
-          '@ | Set-Content .env.dev
+          @"
+          APP_ENV=$env:APP_ENV
+          APP_NAME=$env:APP_NAME
+          "@ | Set-Content .env.dev
 
       - name: Deploy and verify application
         shell: powershell
