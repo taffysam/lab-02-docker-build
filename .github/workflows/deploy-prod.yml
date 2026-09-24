@@ -1,15 +1,14 @@
-
-name: Deploy to development
+name: Deploy to production
 
 on:
   workflow_dispatch:
     inputs:
       image:
-        description: "Published GHCR image reference"
+        description: "Promoted GHCR image reference"
         required: true
         type: string
       simulate_failure:
-        description: "Simulate deployment failure to test rollback"
+        description: "Simulate production deployment failure to test rollback"
         required: false
         default: false
         type: boolean
@@ -18,14 +17,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: shipping-development
+  group: shipping-production
   cancel-in-progress: false
 
 jobs:
   deploy:
-    name: Deploy to Docker Desktop
+    name: Deploy to production
     runs-on: [self-hosted, Windows, X64]
-    environment: development
+    environment: production
 
     steps:
       - name: Check out repository
@@ -39,7 +38,7 @@ jobs:
             throw "Docker Desktop is not accessible."
           }
 
-      - name: Create development environment configuration
+      - name: Create production environment configuration
         shell: powershell
         env:
           APP_ENV: ${{ vars.APP_ENV }}
@@ -48,7 +47,7 @@ jobs:
           @"
           APP_ENV=$env:APP_ENV
           APP_NAME=$env:APP_NAME
-          "@ | Set-Content .env.dev
+          "@ | Set-Content .env.prod
 
       - name: Deploy and verify application
         shell: powershell
@@ -57,18 +56,19 @@ jobs:
           SIMULATE_FAILURE: ${{ inputs.simulate_failure }}
         run: |
           if ($env:SIMULATE_FAILURE -eq "true") {
-            Write-Host "Failure simulation enabled."
-            ./scripts/deploy.ps1 `
-              -Image $env:DEPLOY_IMAGE `
-              -Environment development `
-              -SimulateFailure
+              Write-Host "Production failure simulation enabled."
+
+              ./scripts/deploy.ps1 `
+                -Image $env:DEPLOY_IMAGE `
+                -Environment production `
+                -SimulateFailure
           }
           else {
-            ./scripts/deploy.ps1 `
-              -Image $env:DEPLOY_IMAGE `
-              -Environment development
+              ./scripts/deploy.ps1 `
+                -Image $env:DEPLOY_IMAGE `
+                -Environment production
           }
 
           if ($LASTEXITCODE -ne 0) {
-            throw "Deployment failed. Check deployment and rollback logs."
+              throw "Production deployment failed. Check deployment and rollback logs."
           }
