@@ -151,3 +151,51 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw "Development deployment failed."
           }
+
+  deploy-production:
+    name: Deploy published image to production
+    needs:
+      - publish
+      - deploy-development
+    runs-on: [self-hosted, Windows, X64]
+    environment: production
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Verify Docker access
+        shell: powershell
+        run: |
+          docker info
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Docker Desktop is not accessible."
+          }
+
+      - name: Create production environment configuration
+        shell: powershell
+        env:
+          APP_ENV: ${{ vars.APP_ENV }}
+          APP_NAME: ${{ vars.APP_NAME }}
+        run: |
+          @"
+          APP_ENV=$env:APP_ENV
+          APP_NAME=$env:APP_NAME
+          "@ | Set-Content .env.prod
+
+      - name: Deploy same published image to production
+        shell: powershell
+        env:
+          DEPLOY_IMAGE: ${{ needs.publish.outputs.image }}
+        run: |
+          Write-Host "Promoting immutable image to production:"
+          Write-Host $env:DEPLOY_IMAGE
+
+          ./scripts/deploy.ps1 `
+            -Image $env:DEPLOY_IMAGE `
+            -Environment production
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Production deployment failed."
+          }
