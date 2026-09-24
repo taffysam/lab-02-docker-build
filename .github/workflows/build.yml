@@ -1,4 +1,3 @@
-
 name: Shipping Calculator Build
 
 on:
@@ -48,7 +47,6 @@ jobs:
       - name: Run container tests
         run: docker run --rm shipping-calculator:${{ github.sha }} python -m pytest -v
 
-      
       - name: Save validated Docker image
         run: |
           docker save shipping-calculator:${{ github.sha }} -o shipping-calculator.tar
@@ -60,12 +58,14 @@ jobs:
           path: shipping-calculator.tar
           retention-days: 1
 
-  
   publish:
     name: Publish Docker image
     needs: build
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+
+    outputs:
+      image: ${{ steps.image-ref.outputs.image }}
 
     permissions:
       contents: read
@@ -90,7 +90,64 @@ jobs:
       - name: Tag and publish validated image
         run: |
           IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}/shipping-calculator
+          TAG=${{ github.sha }}
 
-          docker tag shipping-calculator:${{ github.sha }} $IMAGE:${{ github.sha }}
+          docker tag shipping-calculator:${{ github.sha }} $IMAGE:$TAG
+          docker push $IMAGE:$TAG
 
-          docker push $IMAGE:${{ github.sha }}
+      - name: Capture immutable image reference
+        id: image-ref
+        run: |
+          IMAGE=ghcr.io/${GITHUB_REPOSITORY,,}/shipping-calculator
+          TAG=${{ github.sha }}
+
+          DIGEST=$(docker inspect --format='{{index .RepoDigests 0}}' $IMAGE:$TAG)
+
+          echo "Published immutable image: $DIGEST"
+          echo "image=$DIGEST" >> "$GITHUB_OUTPUT"
+
+  deploy-development:
+    name: Deploy published image to development
+    needs: publish
+    runs-on: [self-hosted, Windows, X64]
+    environment: development
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Verify Docker access
+        shell: powershell
+        run: |
+          docker info
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Docker Desktop is not accessible."
+          }
+
+      - name: Create development environment configuration
+        shell: powershell
+        env:
+          APP_ENV: ${{ vars.APP_ENV }}
+          APP_NAME: ${{ vars.APP_NAME }}
+        run: |
+          @"
+          APP_ENV=$env:APP_ENV
+          APP_NAME=$env:APP_NAME
+          "@ | Set-Content .env.dev
+
+      - name: Deploy published image
+        shell: powershell
+        env:
+          DEPLOY_IMAGE: ${{ needs.publish.outputs.image }}
+        run: |
+          Write-Host "Promoting immutable image to development:"
+          Write-Host $env:DEPLOY_IMAGE
+
+          ./scripts/deploy.ps1 `
+            -Image $env:DEPLOY_IMAGE `
+            -Environment development
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Development deployment failed."
+          }
